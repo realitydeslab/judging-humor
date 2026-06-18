@@ -268,5 +268,10 @@ recompute();draw();drawPeri();
 
 out = HTML.replace("__DATA__", json.dumps(DATA))
 open("epiplexity.html", "w").write(out)
-print(f"wrote epiplexity.html ({len(out)/1e6:.2f} MB) — {len(token_strs)} tokens, "
-      f"{len(laugh_pos)} laughs; E1 p={SIG['e1']['p']:.4f}, s_full p={SIG['s_full']['p']:.4f}")
+
+# data artifact embedded by build_viewer.py as the in-page "Epiplexity" tab
+json.dump(DATA, open("data/joke/_epiplexity.json", "w"))
+
+print(f"wrote epiplexity.html ({len(out)/1e6:.2f} MB) + data/joke/_epiplexity.json — "
+      f"{len(token_strs)} tokens, {len(laugh_pos)} laughs; "
+      f"E1 p={SIG['e1']['p']:.4f}, s_full p={SIG['s_full']['p']:.4f}")

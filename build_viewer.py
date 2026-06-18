@@ -17,7 +17,7 @@ import json, glob, os, re, html as _html
 WORDS = json.load(open("data/joke/_words.json"))
 models = {}
 for p in sorted(glob.glob("data/joke/*.json")):
-    if os.path.basename(p) == "_words.json":
+    if os.path.basename(p).startswith("_"):   # _words.json, _epiplexity.json, …
         continue
     d = json.load(open(p))
     models[d["tag"]] = {"probe_layer": d["probe_layer"],
@@ -100,7 +100,52 @@ def md_to_html(md):
     return "\n".join(out)
 
 
-LIT_HTML = md_to_html(open("lit-reviews/literature-review.md").read())
+def build_lit_html(path):
+    """Render the review and wire in-text (Author, Year) citations to anchor jumps
+    into the numbered reference list."""
+    md = open(path).read()
+
+    # ---- parse the reference list -> [(n, surname, year)] in document order ----
+    refs = []
+    if "## References" in md:
+        for line in md.split("## References", 1)[1].split("\n"):
+            m = re.match(r'^\s*\d+\.\s+(.*)$', line)
+            if not m:
+                continue
+            text = m.group(1)
+            sm = re.match(r"([A-Za-z’'`-]+)", text)
+            ym = re.search(r"\b(1[5-9]\d\d|20\d\d)\b", text)
+            refs.append({"n": len(refs) + 1,
+                         "surname": sm.group(1) if sm else None,
+                         "year": ym.group(1) if ym else None})
+
+    html = md_to_html(md)
+
+    # ---- split body from the references section ----
+    marker = "<h2>References</h2>"
+    has_marker = marker in html
+    pre, post = html.split(marker, 1) if has_marker else (html, "")
+
+    # give each reference <li> a stable id (ref1..refN), in order
+    cnt = [0]
+    def _addid(_m):
+        cnt[0] += 1
+        return f'<li id="ref{cnt[0]}"'
+    post = re.sub(r'<li', _addid, post)
+
+    # ---- linkify in-text citations in the body ----
+    connector = r"[A-Za-z,.\s’'&;\-]{0,55}?"
+    for r in refs:
+        s, y, n = r["surname"], r["year"], r["n"]
+        if not s or not y:
+            continue
+        pat = re.compile(r'(?<!\w)(' + re.escape(s) + connector + r'\(?\b' + re.escape(y) + r'\b\)?)')
+        pre = pat.sub(lambda m, n=n: f'<a class="cite" href="#ref{n}">{m.group(1)}</a>', pre)
+
+    return pre + (marker + post if has_marker else "")
+
+
+LIT_HTML = build_lit_html("lit-reviews/literature-review.md")
 
 INTRO_HTML = """
 <h1>Judging Humor</h1>
@@ -164,9 +209,6 @@ HTML = r"""<!DOCTYPE html>
     font:inherit; font-size:13.5px; padding:9px 14px; border-bottom:2px solid transparent; }
   nav.tabs button:hover { color:var(--ink); }
   nav.tabs button.active { color:#fff; border-bottom-color:var(--accent); }
-  nav.tabs a.navlink { color:var(--mut); text-decoration:none; font-size:13.5px;
-    padding:9px 14px; margin-left:auto; border-bottom:2px solid transparent; }
-  nav.tabs a.navlink:hover { color:#fff; }
   .tab { display:none; }
   .tab.active { display:block; }
   /* ---- document tabs (intro + literature) ---- */
@@ -178,6 +220,12 @@ HTML = r"""<!DOCTYPE html>
   .doc-inner p { margin:10px 0; }
   .doc-inner a { color:#7fb0ff; text-decoration:none; }
   .doc-inner a:hover { text-decoration:underline; }
+  .doc-inner a.cite { color:#b59cff; text-decoration:none; cursor:pointer;
+                      border-bottom:1px dotted #6b5fa8; }
+  .doc-inner a.cite:hover { color:#cdbcff; border-bottom-style:solid; }
+  .doc-inner ol li { scroll-margin-top:16px; transition:background .25s; }
+  .doc-inner ol li.flash { background:#2a2440; border-radius:6px;
+                           box-shadow:0 0 0 6px #2a2440; }
   .doc-inner ul, .doc-inner ol { margin:10px 0; padding-left:24px; }
   .doc-inner li { margin:5px 0; }
   .doc-inner code { background:#11141a; border:1px solid #2c313b; border-radius:4px; padding:.5px 5px; font-size:13px; }
@@ -225,6 +273,7 @@ HTML = r"""<!DOCTYPE html>
              font-size:11px; padding:1px 7px; color:#333; }
   #hmpanel.collapsed .hmbody { display:none; }
   #hmpanel svg text { font-family:-apple-system,Segoe UI,sans-serif; fill:#333; }
+__EPI_STYLE__
 </style></head>
 <body>
 <header>
@@ -233,7 +282,7 @@ HTML = r"""<!DOCTYPE html>
     <button data-tab="intro" class="active">Intro</button>
     <button data-tab="viewer">Viewer</button>
     <button data-tab="lit">Literature</button>
-    <a class="navlink" href="epiplexity.html">Epiplexity ↗</a>
+    __EPI_NAV__
   </nav>
 </header>
 
@@ -270,6 +319,8 @@ HTML = r"""<!DOCTYPE html>
 
 <section id="tab-lit" class="tab doc"><div class="doc-inner">__LIT__</div></section>
 
+__EPI_SECTION__
+
 <script id="data" type="application/json">__DATA__</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
@@ -290,8 +341,20 @@ function showTab(name){
   document.querySelectorAll('.tab').forEach(s=>s.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='viewer'){ initViewer(); requestAnimationFrame(()=>{drawBase();drawCursor(null);}); }
+  if(name==='epi' && window.__epi){ window.__epi.init(); requestAnimationFrame(()=>window.__epi.redraw()); }
 }
 tabBtns.forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+
+// ---- in-text citation jumps (smooth scroll + flash the reference) ----
+document.getElementById('tab-lit').addEventListener('click',e=>{
+  const a=e.target.closest('a.cite'); if(!a) return;
+  e.preventDefault();
+  const tgt=document.getElementById(a.getAttribute('href').slice(1));
+  if(!tgt) return;
+  tgt.scrollIntoView({behavior:'smooth', block:'center'});
+  tgt.classList.remove('flash'); void tgt.offsetWidth; tgt.classList.add('flash');
+  setTimeout(()=>tgt.classList.remove('flash'), 1600);
+});
 
 function initViewer(){
   if(viewerReady) return; viewerReady=true;
@@ -435,11 +498,159 @@ function refresh(){
 }
 window.addEventListener('resize',()=>{ if(viewerReady && document.getElementById('tab-viewer').classList.contains('active')){drawBase();drawCursor(null);} });
 </script>
+__EPI_SCRIPT__
 </body></html>"""
+
+# ---- Epiplexity: in-page tab embedding data/joke/_epiplexity.json -------------
+# (produced by build_epiplexity.py — run it before this script). If the artifact
+# is absent the tab is silently omitted.
+EPI = json.load(open("data/joke/_epiplexity.json")) if os.path.exists("data/joke/_epiplexity.json") else None
+
+EPI_STYLE = """
+  :root { --e1:#a07cff; --efull:#7fb0ff; --eshort:#ffb05c; }
+  #tab-epi .epi-scroll { height:calc(100vh - 86px); overflow:auto; }
+  #tab-epi .epi-inner { max-width:1060px; margin:0 auto; padding:26px 28px 90px; }
+  #tab-epi h1 { font-size:25px; margin:0 0 10px; line-height:1.22; }
+  #tab-epi h2 { font-size:18px; margin:28px 0 8px; padding-top:10px; border-top:1px solid #20242d; }
+  #tab-epi p { margin:10px 0; } #tab-epi .lede { font-size:16px; color:#dfe3ea; }
+  #tab-epi a { color:#7fb0ff; }
+  #tab-epi code { background:#11141a; border:1px solid #2c313b; border-radius:4px; padding:.5px 5px; font-size:13px; }
+  #tab-epi .eq { background:#11141a; border:1px solid #2c313b; border-radius:8px; padding:12px 14px; font-size:14px; color:#dfe3ea; margin:12px 0; overflow-x:auto; }
+  #tab-epi table { border-collapse:collapse; width:100%; margin:12px 0; font-size:14px; }
+  #tab-epi th,#tab-epi td { text-align:left; padding:8px 10px; border-bottom:1px solid #20242d; }
+  #tab-epi th { color:var(--mut); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  #tab-epi td b { color:#fff; }
+  #tab-epi .sig { color:#7ee081; } #tab-epi .ns { color:#ff8a7a; }
+  #tab-epi .sw { display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:middle; margin-right:5px; }
+  #tab-epi .chartcard { background:#0c0e12; border:1px solid #262a33; border-radius:10px; padding:12px 14px; margin:14px 0; }
+  #tab-epi .ctrls { display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:13px; margin-bottom:8px; }
+  #tab-epi .ctrls label { display:flex; align-items:center; gap:6px; cursor:pointer; }
+  #tab-epi .ctrls input[type=checkbox]{ accent-color:var(--accent); }
+  #tab-epi .chartlbl { font-size:11.5px; color:var(--mut); display:flex; justify-content:space-between; margin:2px 0; }
+  #tab-epi #e_chart { width:100%; height:230px; display:block; cursor:crosshair; }
+  #tab-epi #e_peri { width:100%; height:230px; display:block; }
+  #tab-epi .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:820px){ #tab-epi .grid2{ grid-template-columns:1fr; } }
+  #tab-epi .key { font-size:12px; color:var(--mut); }
+  #tab-epi blockquote { margin:14px 0; padding:8px 16px; border-left:3px solid var(--accent); background:#14171e; color:#cfd3da; border-radius:0 7px 7px 0; }
+"""
+
+EPI_SECTION = """
+<section id="tab-epi" class="tab"><div class="epi-scroll"><div class="epi-inner">
+<h1>Can epiplexity predict laughter?</h1>
+<p class="lede">A first test of the <a href="https://arxiv.org/abs/2601.03220" target="_blank">epiplexity</a>
+hypothesis (Finzi et al. 2026): laughter should track the <em>structured, learnable</em> component of
+surprise &mdash; not raw surprise. We read <span id="e_hd"></span> token-by-token with a fixed base model
+and ask whether the signal rises into the audience's laughs (laughter stripped before the model &mdash; no leakage).</p>
+<div class="eq">E1(t) = &minus;log p(x<sub>t</sub> | last K) &minus; (&minus;log p(x<sub>t</sub> | all prior))
+= <b style="color:var(--eshort)">s_short</b> &minus; <b style="color:var(--efull)">s_full</b>
+= <b style="color:var(--e1)">in-context epiplexity</b>
+<div class="key" style="margin-top:6px">nats the long-range setup saves on this token (K = <span id="e_kk"></span>); raw surprisal <code>s_full</code> is the H1 baseline.</div></div>
+<h2>Does the signal rise into the laugh?</h2>
+<p class="key">Mean z over the <span id="e_pw"></span>-token run-up before each laugh vs a 5,000-sample permutation null; AUC treats &ldquo;within the run-up&rdquo; as the label.</p>
+<table id="e_stbl"><thead><tr><th>signal</th><th>run-up z</th><th>&sigma; above null</th><th>p-value</th><th>AUC</th><th>offset 0</th></tr></thead><tbody></tbody></table>
+<div class="chartcard">
+  <div class="ctrls">
+    <label><input type="checkbox" id="e_c_e1" checked><span class="sw" style="background:var(--e1)"></span>E1 epiplexity</label>
+    <label><input type="checkbox" id="e_c_full" checked><span class="sw" style="background:var(--efull)"></span>raw surprisal</label>
+    <label><input type="checkbox" id="e_c_short"><span class="sw" style="background:var(--eshort)"></span>weak-obs s_short</label>
+    <label><input type="checkbox" id="e_c_laugh" checked>laughter ticks</label>
+    <label>smooth <input type="range" id="e_sm" min="1" max="81" step="2" value="31"></label>
+    <label>view all <input type="checkbox" id="e_c_all" checked></label>
+  </div>
+  <div class="chartlbl"><span>per-token signal (z-scored, smoothed) across the routine</span><span id="e_hover"></span></div>
+  <canvas id="e_chart"></canvas>
+  <div class="key">hover to inspect a token &middot; uncheck &ldquo;view all&rdquo; then drag to scan a 700-token window</div>
+  <input type="range" id="e_pan" min="0" max="100" value="0" style="width:100%;display:none;margin-top:6px;accent-color:var(--accent)">
+</div>
+<div class="grid2">
+  <div class="chartcard">
+    <div class="chartlbl"><span>peri-laughter average (&plusmn;40 tokens, z)</span><span class="key">0 = last word before laugh</span></div>
+    <canvas id="e_peri"></canvas>
+  </div>
+  <div>
+    <h2 style="margin-top:0;border:0">What this run shows</h2>
+    <p><b>Raw surprisal rises into laughs; forward epiplexity does not</b> &mdash; and that null is the
+    theoretically <em>right</em> one. <code>E1</code> asks whether the long setup makes the punchline
+    <em>more</em> predictable. For a real joke it doesn't: the punchline is an <b>incongruity</b>, surprising
+    <em>given</em> the setup. So E1&asymp;0 at the laugh is the signature of incongruity <em>without forward resolution</em>.</p>
+    <blockquote>The &ldquo;getting it&rdquo; &mdash; the resolution that makes incongruity funny &mdash; is
+    <b>retrodictive</b>: how much seeing the punchline lets you recompress the <em>setup</em>. A forward
+    estimator can't see it. That motivates <b>E1-backward</b> as the next run.</blockquote>
+    <p class="key">Sanity check: E1's highest tokens are callbacks/repetitions (e.g. &ldquo;Why do you think the Klan&hellip;&rdquo; recurs 3&times;) &mdash; real structure, just not concentrated pre-laugh.</p>
+  </div>
+</div>
+<p class="key" style="margin-top:24px;padding-top:14px;border-top:1px solid #20242d">Model: <span id="e_md"></span> (base, fixed) &middot; offset-0 spike = punctuation-dominated punchline boundary (a known confound) &middot; single comedian, no orthogonalization yet &mdash; exploratory.</p>
+</div></div></section>
+"""
+
+EPI_SCRIPT = """<script id="epidata" type="application/json">__EPIDATA__</script>
+<script>
+window.__epi = (function(){
+  const el=document.getElementById('epidata'); if(!el) return null;
+  const D=JSON.parse(el.textContent);
+  const N=D.n_tokens, laughs=D.laugh_positions;
+  const COL={e1:'#a07cff', s_full:'#7fb0ff', s_short:'#ffb05c'};
+  const $=id=>document.getElementById(id);
+  function zsc(a){let m=0;for(const x of a)m+=x;m/=a.length;let s=0;for(const x of a)s+=(x-m)*(x-m);s=Math.sqrt(s/a.length)||1e-8;return a.map(x=>(x-m)/s);}
+  const Z={e1:zsc(D.e1), s_full:zsc(D.s_full), s_short:zsc(D.s_short)};
+  function smooth(a,k){if(k<=1)return a.slice();const q=[];let sum=0,h=(k-1)/2,out=new Array(a.length);
+    for(let i=0;i<a.length+h;i++){if(i<a.length){sum+=a[i];q.push(a[i]);}if(q.length>k){sum-=q.shift();}const idx=i-h;if(idx>=0)out[idx]=sum/q.length;}return out;}
+  let cv,cx,pv,px,CW=0,CH=0,DPR=window.devicePixelRatio||1,SM={},ready=false;
+  function sel(){return {e1:$('e_c_e1').checked,s_full:$('e_c_full').checked,s_short:$('e_c_short').checked};}
+  function win(){ if($('e_c_all').checked)return[0,N]; const w=700,s=Math.round($('e_pan').value/100*(N-w)); return [Math.max(0,s),Math.min(N,s+w)];}
+  function recompute(){const k=+$('e_sm').value;SM={e1:smooth(Z.e1,k),s_full:smooth(Z.s_full,k),s_short:smooth(Z.s_short,k)};}
+  function size(){CW=cv.clientWidth;CH=cv.clientHeight;cv.width=CW*DPR;cv.height=CH*DPR;cx.setTransform(DPR,0,0,DPR,0,0);}
+  function draw(){ if(!cv)return; size(); if(!CW)return; cx.clearRect(0,0,CW,CH);
+    const [a,b]=win(),span=b-a,mid=CH/2,scl=2.6;
+    cx.strokeStyle='#2a2f3a';cx.lineWidth=1;cx.beginPath();cx.moveTo(0,mid);cx.lineTo(CW,mid);cx.stroke();
+    if($('e_c_laugh').checked){cx.strokeStyle='rgba(226,87,76,0.30)';cx.lineWidth=1;laughs.forEach(j=>{if(j<a||j>=b)return;const x=(j-a)/span*CW;cx.beginPath();cx.moveTo(x,0);cx.lineTo(x,CH);cx.stroke();});}
+    const s=sel();
+    for(const k of ['s_short','s_full','e1']){ if(!s[k])continue; const arr=SM[k]; cx.strokeStyle=COL[k]; cx.lineWidth=k==='e1'?1.6:1.1; cx.globalAlpha=k==='e1'?1:0.85; cx.beginPath();
+      for(let p=0;p<CW;p++){const i0=a+Math.floor(p/CW*span),i1=Math.max(i0+1,a+Math.floor((p+1)/CW*span));let sum=0,c=0;for(let i=i0;i<i1&&i<b;i++){sum+=arr[i];c++;}const v=c?sum/c:0;const y=mid-Math.max(-1,Math.min(1,v/scl))*mid*0.94;p?cx.lineTo(p,y):cx.moveTo(p,y);}
+      cx.stroke();cx.globalAlpha=1; }
+  }
+  function hover(clientX){const r=cv.getBoundingClientRect();const [a,b]=win(),span=b-a;const i=Math.max(a,Math.min(b-1,a+Math.round((clientX-r.left)/CW*span)));
+    const near=laughs.some(p=>p>=i&&p-i<15);
+    $('e_hover').innerHTML='tok '+i+' \\u201c'+(D.tokens[i]||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')+'\\u201d \\u00b7 <span style=\"color:'+COL.e1+'\">E1 '+(D.e1[i]>=0?'+':'')+D.e1[i]+'</span> \\u00b7 <span style=\"color:'+COL.s_full+'\">surp '+D.s_full[i]+'</span>'+(near?' \\u00b7 <span style=\"color:#ff8a7a\">\\u21b3laugh\\u226415</span>':'');}
+  function drawPeri(){ if(!pv)return; const W=pv.clientWidth,H=pv.clientHeight; if(!W)return; pv.width=W*DPR;pv.height=H*DPR;px.setTransform(DPR,0,0,DPR,0,0);px.clearRect(0,0,W,H);
+    const off=D.peri.e1.off,n=off.length;let lo=1e9,hi=-1e9;['e1','s_full','s_short'].forEach(k=>D.peri[k].mean.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v);}));const pad=(hi-lo)*0.12||1;lo-=pad;hi+=pad;
+    const X=i=>i/(n-1)*(W-44)+34,Y=v=>H-20-(v-lo)/(hi-lo)*(H-34);
+    px.strokeStyle='#2a2f3a';px.beginPath();px.moveTo(34,Y(0));px.lineTo(W-10,Y(0));px.stroke();
+    const x0=X((n-1)/2);px.strokeStyle='rgba(226,87,76,0.6)';px.lineWidth=1.2;px.beginPath();px.moveTo(x0,4);px.lineTo(x0,H-16);px.stroke();
+    px.fillStyle='#9aa0aa';px.font='10px sans-serif';px.fillText('0',x0-3,H-4);px.fillText('-40',30,H-4);px.fillText('+40',W-26,H-4);
+    ['s_short','s_full','e1'].forEach(k=>{const m=D.peri[k].mean;px.strokeStyle=COL[k];px.lineWidth=k==='e1'?2:1.3;px.beginPath();m.forEach((v,i)=>{const x=X(i),y=Y(v);i?px.lineTo(x,y):px.moveTo(x,y);});px.stroke();});}
+  function buildTable(){ const tb=document.querySelector('#e_stbl tbody'); if(!tb||tb.childElementCount)return;
+    [['e1','E1 epiplexity',COL.e1],['s_full','raw surprisal s_full',COL.s_full],['s_short','weak-obs s_short',COL.s_short]].forEach(function(row){var k=row[0],lbl=row[1],c=row[2];var s=D.stats[k];var sc=s.p<0.05?'sig':'ns';var tr=document.createElement('tr');
+      tr.innerHTML='<td><span class=\"sw\" style=\"background:'+c+'\"></span>'+lbl+'</td><td>'+(s.run_z>=0?'+':'')+s.run_z.toFixed(3)+'</td><td>'+(s.sigma>=0?'+':'')+s.sigma.toFixed(1)+'\\u03c3</td><td class=\"'+sc+'\"><b>'+s.p.toFixed(4)+'</b>'+(s.p<0.05?'':' n.s.')+'</td><td>'+s.auc.toFixed(3)+'</td><td>'+(s.off0_z>=0?'+':'')+s.off0_z.toFixed(2)+'</td>';
+      tb.appendChild(tr);}); }
+  function init(){ if(ready)return; ready=true;
+    cv=$('e_chart');cx=cv.getContext('2d');pv=$('e_peri');px=pv.getContext('2d');
+    $('e_hd').textContent=D.name+' ('+N.toLocaleString()+' tokens, '+D.n_laughs+' laughs)';
+    $('e_kk').textContent=D.short_ctx;$('e_pw').textContent=D.pre_window;$('e_md').textContent=D.model;
+    buildTable();recompute();
+    cv.addEventListener('mousemove',function(e){hover(e.clientX);});
+    ['e_c_e1','e_c_full','e_c_short','e_c_laugh'].forEach(function(id){$(id).onchange=draw;});
+    $('e_sm').oninput=function(){recompute();draw();};
+    $('e_c_all').onchange=function(){$('e_pan').style.display=$('e_c_all').checked?'none':'block';draw();};
+    $('e_pan').oninput=draw;
+    window.addEventListener('resize',function(){if(document.getElementById('tab-epi').classList.contains('active')){draw();drawPeri();}});
+  }
+  function redraw(){recompute();draw();drawPeri();}
+  return {init:init, redraw:redraw};
+})();
+</script>"""
+
+EPI_NAV = '<button data-tab="epi">Epiplexity</button>' if EPI else ''
+EPI_SCRIPT_FULL = EPI_SCRIPT.replace("__EPIDATA__", json.dumps(EPI)) if EPI else ''
 
 out = (HTML.replace("__DATA__", json.dumps(DATA))
            .replace("__INTRO__", INTRO_HTML)
-           .replace("__LIT__", LIT_HTML))
+           .replace("__LIT__", LIT_HTML)
+           .replace("__EPI_STYLE__", EPI_STYLE if EPI else "")
+           .replace("__EPI_NAV__", EPI_NAV)
+           .replace("__EPI_SECTION__", EPI_SECTION if EPI else "")
+           .replace("__EPI_SCRIPT__", EPI_SCRIPT_FULL))
 open("index.html", "w").write(out)
 open("viewer.html", "w").write(out)
 print(f"wrote index.html + viewer.html ({len(out)/1e6:.1f} MB) — {len(models)} models, "
