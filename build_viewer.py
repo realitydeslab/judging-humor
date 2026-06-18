@@ -1,5 +1,10 @@
-"""Merge all per-model word-level JSONs into a single interactive viewer.html.
+"""Build index.html: a tabbed single page with three sections.
 
+  1. Intro       — project overview ("Judging Humor": can an LLM predict the joke?)
+  2. Viewer      — interactive emotion-concept viewer over a stand-up routine
+  3. Literature  — the literature review (rendered from lit-reviews/literature-review.md)
+
+Viewer section:
   * pick a model + an emotion; the joke text is colored by that emotion's
     activation (z) per word (paper-style heatmap)
   * a time-series chart plots the emotion across the routine; audience laughs
@@ -7,7 +12,7 @@
   * a floating "Emotion Probe x Scenario" figure (bottom-left) shows the cosine
     similarity matrix for the selected model, with row/column labels + colorbar
 """
-import json, glob, os
+import json, glob, os, re, html as _html
 
 WORDS = json.load(open("data/joke/_words.json"))
 models = {}
@@ -27,36 +32,179 @@ emotions = [e for e in PRIORITY if e in emotions] + [e for e in emotions if e no
 DATA = {"words": WORDS["words"], "laugh_after_word": WORDS["laugh_after_word"],
         "transcript": WORDS.get("transcript", ""), "emotions": emotions, "models": models}
 
+
+# ---- minimal, dependency-free Markdown -> HTML (enough for our review) ----
+def _inline(t):
+    t = _html.escape(t, quote=False)
+    t = re.sub(r'\[([^\]]+)\]\((https?://[^\s)]+)\)',
+               r'<a href="\2" target="_blank" rel="noopener">\1</a>', t)
+    t = re.sub(r'(?<![">])(https?://[^\s<)\]]+)',
+               r'<a href="\1" target="_blank" rel="noopener">\1</a>', t)
+    t = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', t)
+    t = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'<em>\1</em>', t)
+    t = re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
+    return t
+
+
+def md_to_html(md):
+    out, para, mode = [], [], None  # mode in {None,'ul','ol','bq'}
+
+    def flush_para():
+        if para:
+            out.append("<p>" + _inline(" ".join(para)) + "</p>")
+            para.clear()
+
+    def close_mode():
+        nonlocal mode
+        flush_para()
+        if mode in ("ul", "ol"):
+            out.append(f"</{mode}>")
+        elif mode == "bq":
+            out.append("</blockquote>")
+        mode = None
+
+    for raw in md.split("\n"):
+        line = raw.rstrip()
+        if not line.strip():
+            close_mode(); continue
+        if re.match(r'^---+\s*$', line):
+            close_mode(); out.append("<hr>"); continue
+        m = re.match(r'^(#{1,6})\s+(.*)$', line)
+        if m:
+            close_mode()
+            lvl = len(m.group(1))
+            out.append(f"<h{lvl}>{_inline(m.group(2))}</h{lvl}>"); continue
+        m = re.match(r'^>\s?(.*)$', line)
+        if m:
+            if mode != "bq":
+                close_mode(); out.append("<blockquote>"); mode = "bq"
+            para.append(m.group(1)); continue
+        m = re.match(r'^\d+\.\s+(.*)$', line)
+        if m:
+            if mode != "ol":
+                close_mode(); out.append("<ol>"); mode = "ol"
+            else:
+                flush_para()
+            out.append("<li>" + _inline(m.group(1)) + "</li>"); continue
+        m = re.match(r'^[-*]\s+(.*)$', line)
+        if m:
+            if mode != "ul":
+                close_mode(); out.append("<ul>"); mode = "ul"
+            else:
+                flush_para()
+            out.append("<li>" + _inline(m.group(1)) + "</li>"); continue
+        if mode in ("ul", "ol"):
+            close_mode()
+        para.append(line)
+    close_mode()
+    return "\n".join(out)
+
+
+LIT_HTML = md_to_html(open("lit-reviews/literature-review.md").read())
+
+INTRO_HTML = """
+<h1>Judging Humor</h1>
+<p class="lede">Can a language model predict the joke? This project treats humor as
+<strong>critical unpredictability</strong> — a punchline poised at the <em>edge of chaos</em>
+between the too-expected (boring) and the too-random (nonsense) — and uses a model's own
+<strong>surprisal / perplexity</strong> as the signal.</p>
+
+<h2>The idea</h2>
+<p>Across 2,400 years, humor theory keeps returning to one structure: a <em>disconfirmed
+prediction that is safely resolved</em>. The setup builds a confident expectation (low
+surprisal, narrowing entropy); the punchline violates it (a sharp surprisal spike) in a way
+that can be retroactively made sense of. Information theory lets us measure that violation
+directly with <em>&minus;log p</em> over a language model's next-token distribution — the
+project's working coinage, <em>&ldquo;epiplexity&rdquo;</em>.</p>
+
+<h2>What we do</h2>
+<ul>
+  <li><strong>Probe LLM activations</strong> for emotion / humor concept vectors
+      (an EmotionScope-style replication), recovering linear directions for amusement,
+      surprise, and related concepts.</li>
+  <li><strong>Align those signals against real laughter.</strong> We run the probes over
+      stand-up transcripts (Bill Burr &mdash; <em>Drop Dead Years</em>; John Mulaney &mdash;
+      <em>Kid Gorgeous</em>) whose audience-laughter moments are marked, and ask whether the
+      model &ldquo;lights up&rdquo; just before the crowd laughs.</li>
+  <li><strong>Compare models</strong> (Gemma, Qwen, &hellip;) and probe layers to see where,
+      and how strongly, humor-relevant concepts are represented.</li>
+</ul>
+
+<h2>How to use this page</h2>
+<ul>
+  <li><strong>Viewer</strong> &mdash; pick a model and an emotion. The transcript is colored
+      by that concept's activation per word; the chart traces it across the whole routine with
+      red ticks marking audience laughs. Hover the text to move the chart cursor, and watch the
+      &ldquo;lift into laughs&rdquo; statistic. The floating figure shows the probe&times;scenario
+      cosine matrix.</li>
+  <li><strong>Literature</strong> &mdash; the full literature review (humor theory &rarr;
+      information theory &rarr; computational humor &amp; LLMs &rarr; mechanistic
+      interpretability &rarr; criticality), with ~80 verified references and DOIs. The Markdown
+      source and raw research strands live in <code>lit-reviews/</code>.</li>
+</ul>
+
+<p class="note">Research conducted with AI-assisted multi-agent literature search; citations
+verified against primary records. See the Literature tab for the full review and reference list.</p>
+"""
+
 HTML = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
-<title>Emotion concepts across a stand-up routine</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Judging Humor — can a model predict the joke?</title>
 <style>
   :root { --bg:#0f1115; --panel:#181b22; --ink:#e8e8ea; --mut:#9aa0aa; --accent:#e2574c; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
          font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:12px 20px; border-bottom:1px solid #262a33; }
-  h1 { font-size:17px; margin:0 0 2px; }
-  .sub { color:var(--mut); font-size:12.5px; }
-  .wrap { display:flex; height:calc(100vh - 54px); }
+  header { padding:10px 20px 0; border-bottom:1px solid #262a33; }
+  .brand { font-size:13px; color:var(--mut); letter-spacing:.04em; }
+  .brand b { color:var(--ink); font-weight:600; }
+  nav.tabs { display:flex; gap:4px; margin-top:8px; }
+  nav.tabs button { background:none; border:0; color:var(--mut); cursor:pointer;
+    font:inherit; font-size:13.5px; padding:9px 14px; border-bottom:2px solid transparent; }
+  nav.tabs button:hover { color:var(--ink); }
+  nav.tabs button.active { color:#fff; border-bottom-color:var(--accent); }
+  nav.tabs a.navlink { color:var(--mut); text-decoration:none; font-size:13.5px;
+    padding:9px 14px; margin-left:auto; border-bottom:2px solid transparent; }
+  nav.tabs a.navlink:hover { color:#fff; }
+  .tab { display:none; }
+  .tab.active { display:block; }
+  /* ---- document tabs (intro + literature) ---- */
+  .doc { height:calc(100vh - 86px); overflow:auto; }
+  .doc-inner { max-width:820px; margin:0 auto; padding:34px 28px 90px; }
+  .doc-inner h1 { font-size:28px; margin:0 0 14px; line-height:1.2; }
+  .doc-inner h2 { font-size:19px; margin:30px 0 8px; padding-top:8px; border-top:1px solid #20242d; }
+  .doc-inner h3 { font-size:16px; color:#cfd3da; margin:20px 0 6px; font-weight:600; }
+  .doc-inner p { margin:10px 0; }
+  .doc-inner a { color:#7fb0ff; text-decoration:none; }
+  .doc-inner a:hover { text-decoration:underline; }
+  .doc-inner ul, .doc-inner ol { margin:10px 0; padding-left:24px; }
+  .doc-inner li { margin:5px 0; }
+  .doc-inner code { background:#11141a; border:1px solid #2c313b; border-radius:4px; padding:.5px 5px; font-size:13px; }
+  .doc-inner hr { border:0; border-top:1px solid #20242d; margin:26px 0; }
+  .doc-inner blockquote { margin:14px 0; padding:8px 16px; border-left:3px solid var(--accent);
+                          background:#14171e; color:#cfd3da; border-radius:0 7px 7px 0; }
+  .doc-inner blockquote p { margin:4px 0; }
+  .lede { font-size:17px; color:#dfe3ea; }
+  .note { color:var(--mut); font-size:13px; margin-top:24px; padding-top:14px; border-top:1px solid #20242d; }
+  .doc-inner ol li { margin:6px 0; font-size:13.5px; color:#cdd2da; }
+  /* ---- viewer ---- */
+  .vsub { color:var(--mut); font-size:12.5px; padding:6px 20px 4px; }
+  .wrap { display:flex; height:calc(100vh - 116px); }
   .panel { width:270px; flex:none; background:var(--panel); border-right:1px solid #262a33;
            padding:16px; overflow:auto; }
-  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mut);
-              margin:18px 0 8px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); margin:18px 0 8px; }
   .panel h2:first-child { margin-top:0; }
-  label.m { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:7px;
-            cursor:pointer; font-size:13.5px; }
+  label.m { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:7px; cursor:pointer; font-size:13.5px; }
   label.m:hover { background:#20242d; }
   label.m input { accent-color:var(--accent); }
   .pl { color:var(--mut); font-size:11px; margin-left:auto; }
   select, .scale { width:100%; background:#11141a; color:var(--ink); border:1px solid #2c313b;
             border-radius:7px; padding:8px; font-size:13.5px; }
-  .stat { background:#11141a; border:1px solid #2c313b; border-radius:8px; padding:10px;
-          font-size:12.5px; margin-top:8px; }
+  .stat { background:#11141a; border:1px solid #2c313b; border-radius:8px; padding:10px; font-size:12.5px; margin-top:8px; }
   .stat b { color:#fff; }
   .legend { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--mut); margin-top:6px; }
-  .legend .bar { height:10px; flex:1; border-radius:3px;
-     background:linear-gradient(90deg,#2166ac,#f7f7f7 50%,#b2182b); }
+  .legend .bar { height:10px; flex:1; border-radius:3px; background:linear-gradient(90deg,#2166ac,#f7f7f7 50%,#b2182b); }
   .main { flex:1; display:flex; flex-direction:column; min-width:0; position:relative; }
   .chartbox { flex:none; border-bottom:1px solid #262a33; background:#0c0e12; padding:8px 12px 4px; }
   #chart { width:100%; height:150px; display:block; cursor:crosshair; }
@@ -70,8 +218,7 @@ HTML = r"""<!DOCTYPE html>
   .hint { color:var(--mut); font-size:12px; margin-top:4px; }
   /* floating heatmap figure card */
   #hmpanel { position:absolute; left:14px; bottom:14px; background:#fbfbfb; color:#222;
-             border-radius:10px; box-shadow:0 8px 30px #000a; padding:8px 10px 6px;
-             z-index:20; user-select:none; }
+             border-radius:10px; box-shadow:0 8px 30px #000a; padding:8px 10px 6px; z-index:20; user-select:none; }
   #hmpanel .hmhead { display:flex; align-items:center; justify-content:space-between;
              font:600 12.5px -apple-system,sans-serif; color:#9a3328; margin:0 2px 4px; }
   #hmpanel button { background:#eee; border:1px solid #ccc; border-radius:5px; cursor:pointer;
@@ -81,34 +228,48 @@ HTML = r"""<!DOCTYPE html>
 </style></head>
 <body>
 <header>
-  <h1>Emotion concepts flowing through a stand-up routine</h1>
-  <div class="sub" id="subtitle"></div>
+  <div class="brand"><b>Judging Humor</b> &nbsp;·&nbsp; can a model predict the joke?</div>
+  <nav class="tabs">
+    <button data-tab="intro" class="active">Intro</button>
+    <button data-tab="viewer">Viewer</button>
+    <button data-tab="lit">Literature</button>
+    <a class="navlink" href="epiplexity.html">Epiplexity ↗</a>
+  </nav>
 </header>
-<div class="wrap">
-  <div class="panel">
-    <h2>Model</h2><div id="models"></div>
-    <h2>Emotion</h2><select id="emotion"></select>
-    <h2>Intensity scale (z)</h2>
-    <input class="scale" id="scale" type="range" min="1" max="4" step="0.5" value="2.5">
-    <div class="legend"><span>&minus;z</span><div class="bar"></div><span>+z</span></div>
-    <label class="m" style="margin-top:10px"><input type="checkbox" id="showlaugh" checked> show laughter</label>
-    <label class="m"><input type="checkbox" id="showhm" checked> show probe&times;scenario figure</label>
-    <h2>Laugh alignment</h2><div class="stat" id="stat"></div>
-    <div class="hint">Color &amp; chart = how strongly the chosen model represents the chosen emotion at each word. Red ticks on the chart = audience laughs. Hover the text to move the chart cursor.</div>
-  </div>
-  <div class="main">
-    <div class="chartbox">
-      <div class="chartlbl"><span id="chartTitle"></span><span id="chartHover"></span></div>
-      <canvas id="chart"></canvas>
+
+<section id="tab-intro" class="tab active doc"><div class="doc-inner">__INTRO__</div></section>
+
+<section id="tab-viewer" class="tab">
+  <div class="vsub" id="subtitle"></div>
+  <div class="wrap">
+    <div class="panel">
+      <h2>Model</h2><div id="models"></div>
+      <h2>Emotion</h2><select id="emotion"></select>
+      <h2>Intensity scale (z)</h2>
+      <input class="scale" id="scale" type="range" min="1" max="4" step="0.5" value="2.5">
+      <div class="legend"><span>&minus;z</span><div class="bar"></div><span>+z</span></div>
+      <label class="m" style="margin-top:10px"><input type="checkbox" id="showlaugh" checked> show laughter</label>
+      <label class="m"><input type="checkbox" id="showhm" checked> show probe&times;scenario figure</label>
+      <h2>Laugh alignment</h2><div class="stat" id="stat"></div>
+      <div class="hint">Color &amp; chart = how strongly the chosen model represents the chosen emotion at each word. Red ticks on the chart = audience laughs. Hover the text to move the chart cursor.</div>
     </div>
-    <div class="reader" id="reader"></div>
-    <div id="hmpanel">
-      <div class="hmhead"><span id="hmtitle">Emotion Probe &times; Scenario</span>
-        <button id="hmtoggle">hide</button></div>
-      <div class="hmbody" id="hmbody"></div>
+    <div class="main">
+      <div class="chartbox">
+        <div class="chartlbl"><span id="chartTitle"></span><span id="chartHover"></span></div>
+        <canvas id="chart"></canvas>
+      </div>
+      <div class="reader" id="reader"></div>
+      <div id="hmpanel">
+        <div class="hmhead"><span id="hmtitle">Emotion Probe &times; Scenario</span>
+          <button id="hmtoggle">hide</button></div>
+        <div class="hmbody" id="hmbody"></div>
+      </div>
     </div>
   </div>
-</div>
+</section>
+
+<section id="tab-lit" class="tab doc"><div class="doc-inner">__LIT__</div></section>
+
 <script id="data" type="application/json">__DATA__</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
@@ -116,41 +277,66 @@ const tags = Object.keys(D.models);
 let cur = {model: tags[0], emotion: D.emotions[0], scale: 2.5};
 const laughSet = new Set(D.laugh_after_word);
 const N = D.words.length;
-
-// ---- controls ----
-const mdiv = document.getElementById('models');
-tags.forEach((t,i)=>{
-  const l=document.createElement('label'); l.className='m';
-  l.innerHTML=`<input type="radio" name="model" value="${t}" ${i===0?'checked':''}>
-     <span>${t}</span><span class="pl">L${D.models[t].probe_layer}</span>`;
-  l.querySelector('input').onchange=()=>{cur.model=t; refresh();};
-  mdiv.appendChild(l);
-});
-const esel=document.getElementById('emotion');
-D.emotions.forEach(e=>{const o=document.createElement('option');o.value=e;o.textContent=e;esel.appendChild(o);});
-esel.onchange=()=>{cur.emotion=esel.value; refresh();};
-document.getElementById('scale').oninput=e=>{cur.scale=+e.target.value; refresh();};
-document.getElementById('showlaugh').onchange=e=>{
-  document.querySelectorAll('.laugh').forEach(x=>x.style.display=e.target.checked?'inline-block':'none'); drawBase();};
-document.getElementById('showhm').onchange=e=>{
-  document.getElementById('hmpanel').style.display=e.target.checked?'block':'none';};
-document.getElementById('hmtoggle').onclick=()=>{
-  const p=document.getElementById('hmpanel'); p.classList.toggle('collapsed');
-  document.getElementById('hmtoggle').textContent=p.classList.contains('collapsed')?'show':'hide';};
-
-// ---- render words once ----
 const reader=document.getElementById('reader');
+const cv=document.getElementById('chart'); const ctx=cv.getContext('2d');
 const spans=[];
-let beat=document.createElement('div'); beat.className='beat'; reader.appendChild(beat);
-D.words.forEach((w,i)=>{
-  const s=document.createElement('span'); s.className='w'; s.textContent=w+' '; s.dataset.i=i;
-  spans.push(s); beat.appendChild(s);
-  if(laughSet.has(i)){
-    const c=document.createElement('span'); c.className='laugh'; c.textContent='😂 laughter';
-    beat.appendChild(c);
-    beat=document.createElement('div'); beat.className='beat'; reader.appendChild(beat);
-  }
-});
+let baseImg=null, CW=0, CH=0, DPR=window.devicePixelRatio||1;
+let viewerReady=false;
+
+// ---- tab switching ----
+const tabBtns = document.querySelectorAll('nav.tabs button');
+function showTab(name){
+  tabBtns.forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  document.querySelectorAll('.tab').forEach(s=>s.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='viewer'){ initViewer(); requestAnimationFrame(()=>{drawBase();drawCursor(null);}); }
+}
+tabBtns.forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+
+function initViewer(){
+  if(viewerReady) return; viewerReady=true;
+  // ---- controls ----
+  const mdiv = document.getElementById('models');
+  tags.forEach((t,i)=>{
+    const l=document.createElement('label'); l.className='m';
+    l.innerHTML=`<input type="radio" name="model" value="${t}" ${i===0?'checked':''}>
+       <span>${t}</span><span class="pl">L${D.models[t].probe_layer}</span>`;
+    l.querySelector('input').onchange=()=>{cur.model=t; refresh();};
+    mdiv.appendChild(l);
+  });
+  const esel=document.getElementById('emotion');
+  D.emotions.forEach(e=>{const o=document.createElement('option');o.value=e;o.textContent=e;esel.appendChild(o);});
+  esel.onchange=()=>{cur.emotion=esel.value; refresh();};
+  document.getElementById('scale').oninput=e=>{cur.scale=+e.target.value; refresh();};
+  document.getElementById('showlaugh').onchange=e=>{
+    document.querySelectorAll('.laugh').forEach(x=>x.style.display=e.target.checked?'inline-block':'none'); drawBase();};
+  document.getElementById('showhm').onchange=e=>{
+    document.getElementById('hmpanel').style.display=e.target.checked?'block':'none';};
+  document.getElementById('hmtoggle').onclick=()=>{
+    const p=document.getElementById('hmpanel'); p.classList.toggle('collapsed');
+    document.getElementById('hmtoggle').textContent=p.classList.contains('collapsed')?'show':'hide';};
+
+  // ---- render words once ----
+  let beat=document.createElement('div'); beat.className='beat'; reader.appendChild(beat);
+  D.words.forEach((w,i)=>{
+    const s=document.createElement('span'); s.className='w'; s.textContent=w+' '; s.dataset.i=i;
+    spans.push(s); beat.appendChild(s);
+    if(laughSet.has(i)){
+      const c=document.createElement('span'); c.className='laugh'; c.textContent='😂 laughter';
+      beat.appendChild(c);
+      beat=document.createElement('div'); beat.className='beat'; reader.appendChild(beat);
+    }
+  });
+
+  reader.addEventListener('mousemove',e=>{const t=e.target.closest('.w'); if(!t)return; drawCursor(+t.dataset.i);});
+  reader.addEventListener('mouseleave',()=>{drawCursor(null);document.getElementById('chartHover').textContent='';});
+  cv.addEventListener('mousemove',e=>{
+    const r=cv.getBoundingClientRect(); const idx=Math.max(0,Math.min(N-1,Math.round((e.clientX-r.left)/CW*N)));
+    drawCursor(idx); spans.forEach(s=>s.classList.remove('hot'));
+    const s=spans[idx]; if(s){s.classList.add('hot'); if(e.shiftKey) s.scrollIntoView({block:'center'});}
+  });
+  refresh();
+}
 
 // ---- color heatmap on text ----
 function colorFor(z,scale){
@@ -167,16 +353,15 @@ function recolor(){
 }
 
 // ---- time-series chart ----
-const cv=document.getElementById('chart'); const ctx=cv.getContext('2d');
-let baseImg=null, CW=0, CH=0, DPR=window.devicePixelRatio||1;
 function sizeCanvas(){ CW=cv.clientWidth; CH=cv.clientHeight;
   cv.width=CW*DPR; cv.height=CH*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
 function drawBase(){
   const sc=D.models[cur.model].word_scores[cur.emotion]; if(!sc) return;
-  sizeCanvas(); ctx.clearRect(0,0,CW,CH);
+  sizeCanvas(); if(!CW) return; ctx.clearRect(0,0,CW,CH);
   const mid=CH/2, scale=cur.scale;
   ctx.strokeStyle='#2a2f3a'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,mid); ctx.lineTo(CW,mid); ctx.stroke();
-  if(document.getElementById('showlaugh').checked){ ctx.strokeStyle='rgba(226,87,76,0.28)'; ctx.lineWidth=1;
+  const sl=document.getElementById('showlaugh');
+  if(!sl||sl.checked){ ctx.strokeStyle='rgba(226,87,76,0.28)'; ctx.lineWidth=1;
     D.laugh_after_word.forEach(j=>{const x=j/N*CW; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,CH);ctx.stroke();}); }
   ctx.strokeStyle='#7fb0ff'; ctx.lineWidth=1.4; ctx.beginPath();
   for(let px=0;px<CW;px++){
@@ -193,13 +378,6 @@ function drawCursor(wordIdx){
   const sc=D.models[cur.model].word_scores[cur.emotion];
   document.getElementById('chartHover').textContent=`“${D.words[wordIdx]}”  z=${sc?sc[wordIdx].toFixed(2):'?'}  (word ${wordIdx}/${N})`;
 }
-reader.addEventListener('mousemove',e=>{const t=e.target.closest('.w'); if(!t)return; drawCursor(+t.dataset.i);});
-reader.addEventListener('mouseleave',()=>{drawCursor(null);document.getElementById('chartHover').textContent='';});
-cv.addEventListener('mousemove',e=>{
-  const r=cv.getBoundingClientRect(); const idx=Math.max(0,Math.min(N-1,Math.round((e.clientX-r.left)/CW*N)));
-  drawCursor(idx); spans.forEach(s=>s.classList.remove('hot'));
-  const s=spans[idx]; if(s){s.classList.add('hot'); if(e.shiftKey) s.scrollIntoView({block:'center'});}
-});
 
 // ---- probe x scenario figure (SVG, paper-style) ----
 function rdbu(t){ // t in [-1,1] -> blue/white/red
@@ -217,23 +395,18 @@ function renderHeatmap(){
   const cell=22, LW=84, TOP=4, GW=cols.length*cell, GH=rows.length*cell, COLH=104, CB=70;
   const W=LW+GW+CB, H=TOP+GH+COLH;
   let s=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
-  // cells
   for(let ri=0;ri<rows.length;ri++) for(let cj=0;cj<cols.length;cj++){
     const v=V[ri][cj], x=LW+cj*cell, y=TOP+ri*cell;
     s+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${rdbu(v/mx)}" stroke="#fff" stroke-width="0.5">`+
        `<title>${rows[ri]} × ${cols[cj]} = ${v.toFixed(3)}</title></rect>`;
   }
-  // row labels
   for(let ri=0;ri<rows.length;ri++)
     s+=`<text x="${LW-5}" y="${TOP+ri*cell+cell/2+3.5}" text-anchor="end" font-size="11">${rows[ri]}</text>`;
-  // col labels (rotated)
   for(let cj=0;cj<cols.length;cj++){
     const x=LW+cj*cell+cell/2, y=TOP+GH+6;
     s+=`<text transform="rotate(-42 ${x} ${y})" x="${x}" y="${y}" text-anchor="end" font-size="10.5">${cols[cj]}</text>`;
   }
-  // axis titles
   s+=`<text x="${10}" y="${TOP+GH/2}" font-size="11" font-weight="600" text-anchor="middle" transform="rotate(-90 10 ${TOP+GH/2})">Emotion Probe</text>`;
-  // colorbar
   const cbx=LW+GW+18, cbw=12, cbh=GH;
   s+=`<defs><linearGradient id="cbg" x1="0" y1="0" x2="0" y2="1">`+
      `<stop offset="0%" stop-color="${rdbu(1)}"/><stop offset="50%" stop-color="${rdbu(0)}"/><stop offset="100%" stop-color="${rdbu(-1)}"/></linearGradient></defs>`;
@@ -260,14 +433,16 @@ function refresh(){
   document.getElementById('subtitle').textContent=
     `${D.transcript} · ${N} words · ${D.laugh_after_word.length} laughs · ${tags.length} models · ${D.emotions.length} emotions`;
 }
-window.addEventListener('resize',()=>{drawBase();drawCursor(null);});
-refresh();
+window.addEventListener('resize',()=>{ if(viewerReady && document.getElementById('tab-viewer').classList.contains('active')){drawBase();drawCursor(null);} });
 </script>
 </body></html>"""
 
-out = HTML.replace("__DATA__", json.dumps(DATA))
+out = (HTML.replace("__DATA__", json.dumps(DATA))
+           .replace("__INTRO__", INTRO_HTML)
+           .replace("__LIT__", LIT_HTML))
 open("index.html", "w").write(out)
 open("viewer.html", "w").write(out)
 print(f"wrote index.html + viewer.html ({len(out)/1e6:.1f} MB) — {len(models)} models, "
-      f"{len(DATA['words'])} words, {len(DATA['emotions'])} emotions; "
+      f"{len(DATA['words'])} words, {len(DATA['emotions'])} emotions, "
+      f"lit {len(LIT_HTML)//1000}KB; "
       f"matrices: {[t for t,m in models.items() if m.get('scenario_matrix')]}")
