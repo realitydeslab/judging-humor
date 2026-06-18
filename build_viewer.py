@@ -1,10 +1,11 @@
 """Merge all per-model word-level JSONs into a single interactive viewer.html.
 
-Panel: pick a model + an emotion.
-  * the joke text is colored by that emotion's activation (z) per word
-  * a time-series chart plots the emotion across the whole routine, with the
-    audience laughs marked as vertical ticks
-  * hovering a word draws a linked vertical cursor on the chart (and vice versa)
+  * pick a model + an emotion; the joke text is colored by that emotion's
+    activation (z) per word (paper-style heatmap)
+  * a time-series chart plots the emotion across the routine; audience laughs
+    are vertical red ticks; hovering a word draws a linked cursor on the chart
+  * a floating "Emotion Probe x Scenario" figure (bottom-left) shows the cosine
+    similarity matrix for the selected model, with row/column labels + colorbar
 """
 import json, glob, os
 
@@ -15,7 +16,9 @@ for p in sorted(glob.glob("data/joke/*.json")):
         continue
     d = json.load(open(p))
     models[d["tag"]] = {"probe_layer": d["probe_layer"],
-                        "emotions": d["emotions"], "word_scores": d["word_scores"]}
+                        "emotions": d["emotions"],
+                        "word_scores": d["word_scores"],
+                        "scenario_matrix": d.get("scenario_matrix")}
 
 emotions = sorted({e for m in models.values() for e in m["emotions"]})
 PRIORITY = ["amused", "playful", "delighted", "mirthful", "surprised", "curious", "bored"]
@@ -53,24 +56,28 @@ HTML = r"""<!DOCTYPE html>
   .stat b { color:#fff; }
   .legend { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--mut); margin-top:6px; }
   .legend .bar { height:10px; flex:1; border-radius:3px;
-     background:linear-gradient(90deg,#2f6fe0,#11141a 50%,#e2574c); }
-  table.hm { border-collapse:collapse; margin-top:4px; }
-  table.hm td.rl { font-size:10px; color:#cfd3da; text-align:right; padding-right:5px; white-space:nowrap; }
-  table.hm td.hc { width:14px; height:13px; border:1px solid #0c0e12; cursor:help; }
-  .hmscale { display:flex; align-items:center; gap:6px; font-size:10px; color:var(--mut); margin-top:5px; }
-  .hmscale .bar { height:9px; flex:1; border-radius:3px;
-     background:linear-gradient(90deg,#2166ac,#11141a 50%,#b2182b); }
-  .main { flex:1; display:flex; flex-direction:column; min-width:0; }
+     background:linear-gradient(90deg,#2166ac,#f7f7f7 50%,#b2182b); }
+  .main { flex:1; display:flex; flex-direction:column; min-width:0; position:relative; }
   .chartbox { flex:none; border-bottom:1px solid #262a33; background:#0c0e12; padding:8px 12px 4px; }
   #chart { width:100%; height:150px; display:block; cursor:crosshair; }
   .chartlbl { font-size:11px; color:var(--mut); display:flex; justify-content:space-between; }
-  .reader { flex:1; overflow:auto; padding:22px 30px; }
+  .reader { flex:1; overflow:auto; padding:22px 30px 40px; }
   .beat { margin:0 0 2px; }
   .w { padding:1px 0; border-radius:3px; }
   .w.hot { outline:2px solid #fff3; }
   .laugh { display:inline-block; margin:0 4px; padding:0 7px; border-radius:10px;
            background:#3a1d1d; color:#ff8a7a; font-size:11px; font-weight:600; vertical-align:middle; }
   .hint { color:var(--mut); font-size:12px; margin-top:4px; }
+  /* floating heatmap figure card */
+  #hmpanel { position:absolute; left:14px; bottom:14px; background:#fbfbfb; color:#222;
+             border-radius:10px; box-shadow:0 8px 30px #000a; padding:8px 10px 6px;
+             z-index:20; user-select:none; }
+  #hmpanel .hmhead { display:flex; align-items:center; justify-content:space-between;
+             font:600 12.5px -apple-system,sans-serif; color:#9a3328; margin:0 2px 4px; }
+  #hmpanel button { background:#eee; border:1px solid #ccc; border-radius:5px; cursor:pointer;
+             font-size:11px; padding:1px 7px; color:#333; }
+  #hmpanel.collapsed .hmbody { display:none; }
+  #hmpanel svg text { font-family:-apple-system,Segoe UI,sans-serif; fill:#333; }
 </style></head>
 <body>
 <header>
@@ -85,12 +92,9 @@ HTML = r"""<!DOCTYPE html>
     <input class="scale" id="scale" type="range" min="1" max="4" step="0.5" value="2.5">
     <div class="legend"><span>&minus;z</span><div class="bar"></div><span>+z</span></div>
     <label class="m" style="margin-top:10px"><input type="checkbox" id="showlaugh" checked> show laughter</label>
+    <label class="m"><input type="checkbox" id="showhm" checked> show probe&times;scenario figure</label>
     <h2>Laugh alignment</h2><div class="stat" id="stat"></div>
     <div class="hint">Color &amp; chart = how strongly the chosen model represents the chosen emotion at each word. Red ticks on the chart = audience laughs. Hover the text to move the chart cursor.</div>
-    <h2>Probe &times; scenario (cosine)</h2>
-    <div id="heatmap"></div>
-    <div class="hmscale"><span>&minus;</span><div class="bar"></div><span>+</span></div>
-    <div class="hint">Rows = emotion probe. 12 implicit scenarios (the first 3 are jokes). Hover a cell for names &amp; value. Updates with the selected model.</div>
   </div>
   <div class="main">
     <div class="chartbox">
@@ -98,13 +102,18 @@ HTML = r"""<!DOCTYPE html>
       <canvas id="chart"></canvas>
     </div>
     <div class="reader" id="reader"></div>
+    <div id="hmpanel">
+      <div class="hmhead"><span id="hmtitle">Emotion Probe &times; Scenario</span>
+        <button id="hmtoggle">hide</button></div>
+      <div class="hmbody" id="hmbody"></div>
+    </div>
   </div>
 </div>
 <script id="data" type="application/json">__DATA__</script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
 const tags = Object.keys(D.models);
-let cur = {model: tags[0], emotion: D.emotions[0], scale: 2.5, showlaugh: true};
+let cur = {model: tags[0], emotion: D.emotions[0], scale: 2.5};
 const laughSet = new Set(D.laugh_after_word);
 const N = D.words.length;
 
@@ -121,9 +130,13 @@ const esel=document.getElementById('emotion');
 D.emotions.forEach(e=>{const o=document.createElement('option');o.value=e;o.textContent=e;esel.appendChild(o);});
 esel.onchange=()=>{cur.emotion=esel.value; refresh();};
 document.getElementById('scale').oninput=e=>{cur.scale=+e.target.value; refresh();};
-document.getElementById('showlaugh').onchange=e=>{cur.showlaugh=e.target.checked;
-  document.querySelectorAll('.laugh').forEach(x=>x.style.display=cur.showlaugh?'inline-block':'none');
-  drawBase();};
+document.getElementById('showlaugh').onchange=e=>{
+  document.querySelectorAll('.laugh').forEach(x=>x.style.display=e.target.checked?'inline-block':'none'); drawBase();};
+document.getElementById('showhm').onchange=e=>{
+  document.getElementById('hmpanel').style.display=e.target.checked?'block':'none';};
+document.getElementById('hmtoggle').onclick=()=>{
+  const p=document.getElementById('hmpanel'); p.classList.toggle('collapsed');
+  document.getElementById('hmtoggle').textContent=p.classList.contains('collapsed')?'show':'hide';};
 
 // ---- render words once ----
 const reader=document.getElementById('reader');
@@ -139,7 +152,7 @@ D.words.forEach((w,i)=>{
   }
 });
 
-// ---- color heatmap ----
+// ---- color heatmap on text ----
 function colorFor(z,scale){
   let t=Math.max(-1,Math.min(1,z/scale));
   if(t>=0) return `rgba(226,87,76,${(t*0.85).toFixed(3)})`;
@@ -153,26 +166,18 @@ function recolor(){
   }
 }
 
-// ---- chart ----
+// ---- time-series chart ----
 const cv=document.getElementById('chart'); const ctx=cv.getContext('2d');
 let baseImg=null, CW=0, CH=0, DPR=window.devicePixelRatio||1;
-function sizeCanvas(){
-  CW=cv.clientWidth; CH=cv.clientHeight;
-  cv.width=CW*DPR; cv.height=CH*DPR; ctx.setTransform(DPR,0,0,DPR,0,0);
-}
+function sizeCanvas(){ CW=cv.clientWidth; CH=cv.clientHeight;
+  cv.width=CW*DPR; cv.height=CH*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
 function drawBase(){
   const sc=D.models[cur.model].word_scores[cur.emotion]; if(!sc) return;
-  sizeCanvas();
-  ctx.clearRect(0,0,CW,CH);
+  sizeCanvas(); ctx.clearRect(0,0,CW,CH);
   const mid=CH/2, scale=cur.scale;
-  // zero line
-  ctx.strokeStyle='#2a2f3a'; ctx.lineWidth=1; ctx.beginPath();
-  ctx.moveTo(0,mid); ctx.lineTo(CW,mid); ctx.stroke();
-  // laughter ticks
-  if(cur.showlaugh){ ctx.strokeStyle='rgba(226,87,76,0.28)'; ctx.lineWidth=1;
-    D.laugh_after_word.forEach(j=>{const x=j/N*CW; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,CH);ctx.stroke();});
-  }
-  // per-pixel mean line
+  ctx.strokeStyle='#2a2f3a'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,mid); ctx.lineTo(CW,mid); ctx.stroke();
+  if(document.getElementById('showlaugh').checked){ ctx.strokeStyle='rgba(226,87,76,0.28)'; ctx.lineWidth=1;
+    D.laugh_after_word.forEach(j=>{const x=j/N*CW; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,CH);ctx.stroke();}); }
   ctx.strokeStyle='#7fb0ff'; ctx.lineWidth=1.4; ctx.beginPath();
   for(let px=0;px<CW;px++){
     const a=Math.floor(px/CW*N), b=Math.max(a+1,Math.floor((px+1)/CW*N));
@@ -180,54 +185,66 @@ function drawBase(){
     const z=c?s/c:0; const y=mid-Math.max(-1,Math.min(1,z/scale))*mid*0.92;
     if(px===0)ctx.moveTo(px,y); else ctx.lineTo(px,y);
   }
-  ctx.stroke();
-  baseImg=ctx.getImageData(0,0,cv.width,cv.height);
+  ctx.stroke(); baseImg=ctx.getImageData(0,0,cv.width,cv.height);
 }
 function drawCursor(wordIdx){
-  if(!baseImg) return;
-  ctx.putImageData(baseImg,0,0);
-  if(wordIdx==null) return;
-  const x=wordIdx/N*CW;
-  ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.beginPath();
-  ctx.moveTo(x,0); ctx.lineTo(x,CH); ctx.stroke();
+  if(!baseImg) return; ctx.putImageData(baseImg,0,0); if(wordIdx==null) return;
+  const x=wordIdx/N*CW; ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,CH); ctx.stroke();
   const sc=D.models[cur.model].word_scores[cur.emotion];
-  document.getElementById('chartHover').textContent=
-    `“${D.words[wordIdx]}”  z=${sc?sc[wordIdx].toFixed(2):'?'}  (word ${wordIdx}/${N})`;
+  document.getElementById('chartHover').textContent=`“${D.words[wordIdx]}”  z=${sc?sc[wordIdx].toFixed(2):'?'}  (word ${wordIdx}/${N})`;
 }
-
-// ---- linked hover: text -> chart ----
-reader.addEventListener('mousemove',e=>{
-  const t=e.target.closest('.w'); if(!t)return;
-  const i=+t.dataset.i; drawCursor(i);
-});
+reader.addEventListener('mousemove',e=>{const t=e.target.closest('.w'); if(!t)return; drawCursor(+t.dataset.i);});
 reader.addEventListener('mouseleave',()=>{drawCursor(null);document.getElementById('chartHover').textContent='';});
-// ---- chart -> text (bonus) ----
 cv.addEventListener('mousemove',e=>{
-  const r=cv.getBoundingClientRect(); const i=Math.round((e.clientX-r.left)/CW*N);
-  const idx=Math.max(0,Math.min(N-1,i)); drawCursor(idx);
-  spans.forEach(s=>s.classList.remove('hot'));
-  const s=spans[idx]; if(s){s.classList.add('hot');
-    if(e.shiftKey) s.scrollIntoView({block:'center'});}
+  const r=cv.getBoundingClientRect(); const idx=Math.max(0,Math.min(N-1,Math.round((e.clientX-r.left)/CW*N)));
+  drawCursor(idx); spans.forEach(s=>s.classList.remove('hot'));
+  const s=spans[idx]; if(s){s.classList.add('hot'); if(e.shiftKey) s.scrollIntoView({block:'center'});}
 });
 
-function hmColor(v,m){ let t=Math.max(-1,Math.min(1,v/m));
-  if(t>=0) return `rgba(178,24,43,${(0.12+0.88*t).toFixed(3)})`;
-  return `rgba(33,102,172,${(0.12+0.88*-t).toFixed(3)})`; }
-function renderHeatmap(){
-  const box=document.getElementById('heatmap');
-  const sm=D.models[cur.model].scenario_matrix;
-  if(!sm||!sm.values){ box.innerHTML='<span class="hint">not computed for this model yet</span>'; return; }
-  let mx=0; sm.values.forEach(r=>r.forEach(v=>{if(Math.abs(v)>mx)mx=Math.abs(v);})); mx=mx||0.1;
-  let h='<table class="hm">';
-  sm.rows.forEach((r,ri)=>{
-    h+='<tr><td class="rl">'+r+'</td>';
-    sm.values[ri].forEach((v,cj)=>{
-      h+=`<td class="hc" style="background:${hmColor(v,mx)}" title="${r} × ${sm.cols[cj]} = ${v.toFixed(3)}"></td>`;
-    });
-    h+='</tr>';
-  });
-  box.innerHTML=h+'</table>';
+// ---- probe x scenario figure (SVG, paper-style) ----
+function rdbu(t){ // t in [-1,1] -> blue/white/red
+  const W=[247,247,247], B=[33,102,172], R=[178,24,43];
+  let a=W,b,f; if(t<0){b=B;f=Math.min(1,-t);} else {b=R;f=Math.min(1,t);}
+  return `rgb(${a.map((x,i)=>Math.round(x+(b[i]-x)*f)).join(',')})`;
 }
+function renderHeatmap(){
+  const body=document.getElementById('hmbody');
+  document.getElementById('hmtitle').textContent=`Emotion Probe × Scenario — ${cur.model}`;
+  const sm=D.models[cur.model].scenario_matrix;
+  if(!sm||!sm.values){ body.innerHTML='<div style="color:#888;font-size:12px;padding:14px">not computed for this model yet</div>'; return; }
+  const rows=sm.rows, cols=sm.cols, V=sm.values;
+  let mx=0; V.forEach(r=>r.forEach(v=>{if(Math.abs(v)>mx)mx=Math.abs(v);})); mx=Math.max(mx,1e-3);
+  const cell=22, LW=84, TOP=4, GW=cols.length*cell, GH=rows.length*cell, COLH=104, CB=70;
+  const W=LW+GW+CB, H=TOP+GH+COLH;
+  let s=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  // cells
+  for(let ri=0;ri<rows.length;ri++) for(let cj=0;cj<cols.length;cj++){
+    const v=V[ri][cj], x=LW+cj*cell, y=TOP+ri*cell;
+    s+=`<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${rdbu(v/mx)}" stroke="#fff" stroke-width="0.5">`+
+       `<title>${rows[ri]} × ${cols[cj]} = ${v.toFixed(3)}</title></rect>`;
+  }
+  // row labels
+  for(let ri=0;ri<rows.length;ri++)
+    s+=`<text x="${LW-5}" y="${TOP+ri*cell+cell/2+3.5}" text-anchor="end" font-size="11">${rows[ri]}</text>`;
+  // col labels (rotated)
+  for(let cj=0;cj<cols.length;cj++){
+    const x=LW+cj*cell+cell/2, y=TOP+GH+6;
+    s+=`<text transform="rotate(-42 ${x} ${y})" x="${x}" y="${y}" text-anchor="end" font-size="10.5">${cols[cj]}</text>`;
+  }
+  // axis titles
+  s+=`<text x="${10}" y="${TOP+GH/2}" font-size="11" font-weight="600" text-anchor="middle" transform="rotate(-90 10 ${TOP+GH/2})">Emotion Probe</text>`;
+  // colorbar
+  const cbx=LW+GW+18, cbw=12, cbh=GH;
+  s+=`<defs><linearGradient id="cbg" x1="0" y1="0" x2="0" y2="1">`+
+     `<stop offset="0%" stop-color="${rdbu(1)}"/><stop offset="50%" stop-color="${rdbu(0)}"/><stop offset="100%" stop-color="${rdbu(-1)}"/></linearGradient></defs>`;
+  s+=`<rect x="${cbx}" y="${TOP}" width="${cbw}" height="${cbh}" fill="url(#cbg)" stroke="#bbb" stroke-width="0.5"/>`;
+  [[1,'+'+mx.toFixed(2)],[0.5,'+'+(mx/2).toFixed(2)],[0,'0'],[-0.5,'-'+(mx/2).toFixed(2)],[-1,'-'+mx.toFixed(2)]].forEach(([t,lab])=>{
+    const y=TOP+(1-(t+1)/2)*cbh; s+=`<text x="${cbx+cbw+3}" y="${y+3.5}" font-size="9.5">${lab}</text>`;
+  });
+  s+=`<text x="${cbx+cbw+34}" y="${TOP+cbh/2}" font-size="10" font-weight="600" text-anchor="middle" transform="rotate(90 ${cbx+cbw+34} ${TOP+cbh/2})">Cosine similarity</text>`;
+  body.innerHTML=s+'</svg>';
+}
+
 function refresh(){
   recolor(); drawBase(); drawCursor(null); renderHeatmap();
   const sc=D.models[cur.model].word_scores[cur.emotion];
@@ -249,7 +266,8 @@ refresh();
 </body></html>"""
 
 out = HTML.replace("__DATA__", json.dumps(DATA))
-open("index.html", "w").write(out)     # GitHub Pages entry point
-open("viewer.html", "w").write(out)    # local convenience copy
+open("index.html", "w").write(out)
+open("viewer.html", "w").write(out)
 print(f"wrote index.html + viewer.html ({len(out)/1e6:.1f} MB) — {len(models)} models, "
-      f"{len(DATA['words'])} words, {len(DATA['emotions'])} emotions")
+      f"{len(DATA['words'])} words, {len(DATA['emotions'])} emotions; "
+      f"matrices: {[t for t,m in models.items() if m.get('scenario_matrix')]}")
