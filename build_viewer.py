@@ -249,6 +249,7 @@ refresh();
 </body></html>"""
 
 out = HTML.replace("__DATA__", json.dumps(DATA))
-open("viewer.html", "w").write(out)
-print(f"wrote viewer.html ({len(out)/1e6:.1f} MB) — {len(models)} models, "
+open("index.html", "w").write(out)     # GitHub Pages entry point
+open("viewer.html", "w").write(out)    # local convenience copy
+print(f"wrote index.html + viewer.html ({len(out)/1e6:.1f} MB) — {len(models)} models, "
       f"{len(DATA['words'])} words, {len(DATA['emotions'])} emotions")
