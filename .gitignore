@@ -1,0 +1,20 @@
+# Python envs (huge)
+.venv/
+.venv-es/
+__pycache__/
+*.pyc
+
+# Cloned dependency (has its own git history); installed via pip -e
+EmotionScope/
+
+# OS
+.DS_Store
+
+# Large regenerable model-specific binaries
+data/vectors/*.npz
+
+# Background task scratch
+/tmp/
+
+# Harness/session scratch
+.claude/

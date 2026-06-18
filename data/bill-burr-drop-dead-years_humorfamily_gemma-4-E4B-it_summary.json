@@ -1,0 +1,37 @@
+{
+  "amused": {
+    "detection_auc": 0.527,
+    "pre_laugh_z_above_null": 2.23,
+    "p_value": 0.012
+  },
+  "playful": {
+    "detection_auc": 0.539,
+    "pre_laugh_z_above_null": 3.58,
+    "p_value": 0.0008
+  },
+  "delighted": {
+    "detection_auc": 0.539,
+    "pre_laugh_z_above_null": 3.54,
+    "p_value": 0.0002
+  },
+  "mirthful": {
+    "detection_auc": 0.543,
+    "pre_laugh_z_above_null": 4.51,
+    "p_value": 0.0002
+  },
+  "surprised": {
+    "detection_auc": 0.47,
+    "pre_laugh_z_above_null": -2.64,
+    "p_value": 0.997
+  },
+  "curious": {
+    "detection_auc": 0.548,
+    "pre_laugh_z_above_null": 4.71,
+    "p_value": 0.0002
+  },
+  "bored": {
+    "detection_auc": 0.544,
+    "pre_laugh_z_above_null": 4.91,
+    "p_value": 0.0002
+  }
+}
