@@ -1,0 +1,40 @@
+{
+ "model": "google/gemma-2-9b-it",
+ "results": {
+  "amused": {
+   "peak_r": 0.031,
+   "lag_s": 0.0,
+   "p": 0.3878
+  },
+  "playful": {
+   "peak_r": 0.099,
+   "lag_s": 0.0,
+   "p": 0.1044
+  },
+  "delighted": {
+   "peak_r": 0.168,
+   "lag_s": 0.0,
+   "p": 0.0015
+  },
+  "mirthful": {
+   "peak_r": 0.151,
+   "lag_s": 0.0,
+   "p": 0.0085
+  },
+  "surprised": {
+   "peak_r": 0.012,
+   "lag_s": 2.5,
+   "p": 0.5617
+  },
+  "curious": {
+   "peak_r": 0.02,
+   "lag_s": 2.5,
+   "p": 0.5002
+  },
+  "bored": {
+   "peak_r": 0.023,
+   "lag_s": 0.0,
+   "p": 0.4673
+  }
+ }
+}

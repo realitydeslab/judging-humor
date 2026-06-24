@@ -1,0 +1,19 @@
+# Pinned to match the known-good Mac .venv-es env.
+# torch is provided by the RunPod PyTorch template (CUDA build) — do NOT pin it here.
+transformers==5.12.1
+transformer-lens==3.2.1
+accelerate==1.14.0
+numpy==2.4.6
+scipy==1.17.1
+scikit-learn==1.9.0
+einops==0.8.2
+matplotlib==3.11.0
+safetensors==0.8.0
+sentencepiece==0.2.1
+protobuf==7.35.1
+pandas==3.0.3
+tqdm==4.68.3
+rich==15.0.0
+steering-vectors==0.12.2
+bitsandbytes>=0.43          # Linux/CUDA only; enables optional 8-bit loads
+huggingface-hub>=0.19

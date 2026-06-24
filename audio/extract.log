@@ -1,0 +1,14 @@
+audio: 563.0s on mps
+Laughter: loading AST audioset classifier ...
+/Users/amber/Projects/Oxford/Judging-Humor/.venv-es/lib/python3.13/site-packages/transformers/audio_utils.py:559: UserWarning: At least one mel filter has all zero values. The value for `num_mel_filters` (128) may be set too high. Or, the value for `num_frequency_bins` (257) may be set too low.
+  warnings.warn(
+Loading weights:   0%|          | 0/203 [00:00<?, ?it/s]Loading weights: 100%|██████████| 203/203 [00:00<00:00, 18965.22it/s]
+  laughter classes: ['Laughter', 'Baby laughter', 'Giggle', 'Snicker', 'Belly laugh', 'Chuckle, chortle']
+  -> audio/gervais_fatpeople_laughter.json  (0 intervals)
+
+=== laughter (time : strength : conf : loudness above baseline) ===
+ASR: loading faster-whisper large-v3 (CPU int8) ...
+ASR: transcribing with word timestamps ...
+
+  -> audio/gervais_fatpeople_asr.json  (1606 words, 205 segments)
+  -> audio/gervais_fatpeople_transcript.txt

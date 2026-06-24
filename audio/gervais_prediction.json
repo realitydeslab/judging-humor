@@ -1,0 +1,43 @@
+{
+ "model": "google/gemma-2-9b-it",
+ "n_words": 1606,
+ "n_laughs": 25,
+ "results": {
+  "amused": {
+   "det_auc": 0.485,
+   "perm_p": 0.5665,
+   "z_above_null": -0.14,
+   "r_strength": -0.511
+  },
+  "playful": {
+   "det_auc": 0.494,
+   "perm_p": 0.6251,
+   "z_above_null": -0.32,
+   "r_strength": -0.343
+  },
+  "delighted": {
+   "det_auc": 0.509,
+   "perm_p": 0.3391,
+   "z_above_null": 0.39,
+   "r_strength": 0.112
+  },
+  "mirthful": {
+   "det_auc": 0.446,
+   "perm_p": 0.7892,
+   "z_above_null": -0.83,
+   "r_strength": -0.342
+  },
+  "surprised": {
+   "det_auc": 0.557,
+   "perm_p": 0.1264,
+   "z_above_null": 1.17,
+   "r_strength": -0.051
+  },
+  "bored": {
+   "det_auc": 0.422,
+   "perm_p": 0.9154,
+   "z_above_null": -1.4,
+   "r_strength": -0.008
+  }
+ }
+}

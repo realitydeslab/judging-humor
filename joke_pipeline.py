@@ -134,7 +134,8 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--transcript", default="data/bill-burr-drop-dead-years.txt")
     args = ap.parse_args()
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = ("cuda" if torch.cuda.is_available()
+              else "mps" if torch.backends.mps.is_available() else "cpu")
     tag = model_tag(args.model)
 
     text = open(args.transcript).read()

@@ -1,0 +1,48 @@
+{
+ "model": "google/gemma-2-9b-it",
+ "tag": "gemma-2-9b-it",
+ "n_grid": 2243,
+ "n_features": 35,
+ "lags_s": [
+  0.0,
+  0.5,
+  1.0,
+  1.5,
+  2.0
+ ],
+ "cv_r2": -0.0386,
+ "cv_pearson_r": 0.087,
+ "perm_p": 0.5015,
+ "null_r2_mean": -0.0399,
+ "null_r2_p95": 0.0048,
+ "coef_by_emotion": {
+  "amused": {
+   "coef": 0.004,
+   "lag_s": 0.0
+  },
+  "playful": {
+   "coef": 0.003,
+   "lag_s": 0.0
+  },
+  "delighted": {
+   "coef": 0.007,
+   "lag_s": 0.0
+  },
+  "mirthful": {
+   "coef": 0.013,
+   "lag_s": 0.0
+  },
+  "surprised": {
+   "coef": -0.003,
+   "lag_s": 0.0
+  },
+  "curious": {
+   "coef": -0.005,
+   "lag_s": 1.0
+  },
+  "bored": {
+   "coef": -0.008,
+   "lag_s": 2.0
+  }
+ }
+}

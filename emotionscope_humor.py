@@ -205,7 +205,8 @@ def main():
                     help="float32 ok for <=3B; use bfloat16 for larger models")
     args = ap.parse_args()
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = ("cuda" if torch.cuda.is_available()
+              else "mps" if torch.backends.mps.is_available() else "cpu")
     from transformers import AutoConfig
     multimodal = getattr(AutoConfig.from_pretrained(args.model), "text_config", None) is not None
     if multimodal:  # Gemma 4, Qwen3.5/3.6 — nested text decoder, needs the adapter
